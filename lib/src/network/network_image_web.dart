@@ -7,21 +7,23 @@
 import 'dart:async';
 import 'dart:js_interop';
 import 'dart:ui' as ui;
+import 'dart:html' as html;
+
 
 import 'package:extended_image_library/src/extended_image_provider.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
-import 'package:flutter/src/services/dom.dart';
+// import 'package:flutter/src/services/dom.dart';
 import 'package:http_client_helper/http_client_helper.dart';
 
 import 'extended_network_image_provider.dart' as image_provider;
 
 /// Creates a type for an overridable factory function for testing purposes.
-typedef HttpRequestFactory = DomXMLHttpRequest Function();
+typedef HttpRequestFactory = html.HttpRequest Function();
 
 /// Default HTTP client.
-DomXMLHttpRequest _httpClient() {
-  return DomXMLHttpRequest();
+html.HttpRequest  _httpClient() {
+  return html.HttpRequest();
 }
 
 /// Creates an overridable factory function.
@@ -150,11 +152,11 @@ class ExtendedNetworkImageProvider
     // We use a different method when headers are set because the
     // `ui.webOnlyInstantiateImageCodecFromUrl` method is not capable of handling headers.
     if (isCanvasKit || containsNetworkImageHeaders) {
-      final Completer<DomXMLHttpRequest> completer =
-          Completer<DomXMLHttpRequest>();
-      final DomXMLHttpRequest request = httpRequestFactory();
+      final Completer<html.HttpRequest> completer =
+          Completer<html.HttpRequest>();
+      final html.HttpRequest request = httpRequestFactory();
 
-      request.open('GET', key.url, true);
+      request.open('GET', key.url);
       request.responseType = 'arraybuffer';
       if (containsNetworkImageHeaders) {
         key.headers!.forEach((String header, String value) {
@@ -162,7 +164,7 @@ class ExtendedNetworkImageProvider
         });
       }
 
-      request.addEventListener('load', createDomEventListener((DomEvent e) {
+      request.addEventListener('load', (html.Event e) {
         final int? status = request.status;
         final bool accepted = status! >= 200 && status < 300;
         final bool fileUri = status == 0; // file:// URIs have status of 0.
@@ -178,10 +180,11 @@ class ExtendedNetworkImageProvider
           throw NetworkImageLoadException(
               statusCode: request.status ?? 400, uri: resolved);
         }
-      }));
+      });
 
-      request.addEventListener(
-          'error', createDomEventListener(completer.completeError));
+      request.addEventListener('error', (html.Event e) {
+      completer.completeError(e);
+      });
 
       request.send();
 
