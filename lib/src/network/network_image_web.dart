@@ -13,10 +13,12 @@ import 'dart:html' as html;
 import 'package:extended_image_library/src/extended_image_provider.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
-// import 'package:flutter/src/services/dom.dart';
-import 'package:http_client_helper/http_client_helper.dart';
 
-import 'extended_network_image_provider.dart' as image_provider;
+import 'package:http_client_helper/http_client_helper.dart';
+import 'package:web/web.dart' as web;
+import 'extended_network_image_provider.dart' as extended_image_provider;
+// ignore: directives_ordering
+import 'package:flutter/src/painting/image_provider.dart' as image_provider;
 
 /// Creates a type for an overridable factory function for testing purposes.
 typedef HttpRequestFactory = html.HttpRequest Function();
@@ -26,6 +28,11 @@ html.HttpRequest  _httpClient() {
   return html.HttpRequest();
 }
 
+// Method signature for _loadAsync decode callbacks.
+typedef _SimpleDecoderCallback = Future<ui.Codec> Function(
+    ui.ImmutableBuffer buffer);
+
+
 /// Creates an overridable factory function.
 HttpRequestFactory httpRequestFactory = _httpClient;
 
@@ -34,13 +41,16 @@ void debugRestoreHttpRequestFactory() {
   httpRequestFactory = _httpClient;
 }
 
-/// The dart:html implementation of [image_provider.NetworkImage].
+/// The web implementation of [image_provider.NetworkImage].
 ///
 /// NetworkImage on the web does not support decoding to a specified size.
 class ExtendedNetworkImageProvider
-    extends ImageProvider<image_provider.ExtendedNetworkImageProvider>
-    with ExtendedImageProvider<image_provider.ExtendedNetworkImageProvider>
-    implements image_provider.ExtendedNetworkImageProvider {
+    extends ImageProvider<extended_image_provider.ExtendedNetworkImageProvider>
+    with
+        ExtendedImageProvider<
+            extended_image_provider.ExtendedNetworkImageProvider>
+    implements
+        extended_image_provider.ExtendedNetworkImageProvider {
   /// Creates an object that fetches the image at the given URL.
   ///
   /// The arguments [url] and [scale] must not be null.
@@ -111,8 +121,8 @@ class ExtendedNetworkImageProvider
 
   @override
   ImageStreamCompleter loadImage(
-      image_provider.ExtendedNetworkImageProvider key,
-      ImageDecoderCallback decode) {
+      extended_image_provider.ExtendedNetworkImageProvider key,
+      image_provider.ImageDecoderCallback decode) {
     // Ownership of this controller is handed off to [_loadAsync]; it is that
     // method's responsibility to close the controller's stream when the image
     // has been loaded or an error is thrown.
@@ -120,29 +130,38 @@ class ExtendedNetworkImageProvider
         StreamController<ImageChunkEvent>();
 
     return MultiFrameImageStreamCompleter(
+      chunkEvents: chunkEvents.stream,
       codec: _loadAsync(key, decode, chunkEvents),
       scale: key.scale,
-      chunkEvents: chunkEvents.stream,
-      informationCollector: () {
-        return <DiagnosticsNode>[
-          DiagnosticsProperty<ImageProvider>('Image provider', this),
-          DiagnosticsProperty<image_provider.ExtendedNetworkImageProvider>(
-              'Image key', key),
-        ];
-      },
+      debugLabel: key.url,
+      informationCollector: _imageStreamInformationCollector(key),
     );
   }
 
-  // TODO(garyq): We should eventually support custom decoding of network images on Web as
-  // well, see https://github.com/flutter/flutter/issues/42789.
-  //
-  // Web does not support decoding network images to a specified size. The decode parameter
-  // here is ignored and the web-only `ui.webOnlyInstantiateImageCodecFromUrl` will be used
-  // directly in place of the typical `instantiateImageCodec` method.
+  InformationCollector? _imageStreamInformationCollector(
+      extended_image_provider.ExtendedNetworkImageProvider key) {
+    InformationCollector? collector;
+    assert(() {
+      collector = () => <DiagnosticsNode>[
+            DiagnosticsProperty<image_provider.ImageProvider>(
+                'Image provider', this),
+            DiagnosticsProperty<
+                    extended_image_provider.ExtendedNetworkImageProvider>(
+                'Image key', key),
+          ];
+      return true;
+    }());
+    return collector;
+  }
+
+  // Html renderer does not support decoding network images to a specified size. The decode parameter
+  // here is ignored and `ui_web.createImageCodecFromUrl` will be used directly
+  // in place of the typical `instantiateImageCodec` method.
   Future<ui.Codec> _loadAsync(
-      image_provider.ExtendedNetworkImageProvider key,
-      ImageDecoderCallback decode,
-      StreamController<ImageChunkEvent> chunkEvents) async {
+    extended_image_provider.ExtendedNetworkImageProvider key,
+    _SimpleDecoderCallback decode,
+    StreamController<ImageChunkEvent> chunkEvents,
+  ) async {
     assert(key == this);
 
     final Uri resolved = Uri.base.resolve(key.url);
@@ -150,7 +169,7 @@ class ExtendedNetworkImageProvider
     final bool containsNetworkImageHeaders = key.headers?.isNotEmpty ?? false;
 
     // We use a different method when headers are set because the
-    // `ui.webOnlyInstantiateImageCodecFromUrl` method is not capable of handling headers.
+    // `ui_web.createImageCodecFromUrl` method is not capable of handling headers.
     if (isCanvasKit || containsNetworkImageHeaders) {
       final Completer<html.HttpRequest> completer =
           Completer<html.HttpRequest>();
@@ -163,7 +182,7 @@ class ExtendedNetworkImageProvider
           request.setRequestHeader(header, value);
         });
       }
-
+      
       request.addEventListener('load', (html.Event e) {
         final int? status = request.status;
         final bool accepted = status! >= 200 && status < 300;
@@ -194,29 +213,23 @@ class ExtendedNetworkImageProvider
           (request.response! as JSArrayBuffer).toDart.asUint8List();
 
       if (bytes.lengthInBytes == 0) {
-        throw NetworkImageLoadException(
-            statusCode: request.status!, uri: resolved);
+        throw image_provider.NetworkImageLoadException(
+            statusCode: request.status, uri: resolved);
       }
-
-      final ui.ImmutableBuffer buffer =
-          await ui.ImmutableBuffer.fromUint8List(bytes);
-      return decode(buffer);
+      return decode(await ui.ImmutableBuffer.fromUint8List(bytes));
     } else {
-      // This API only exists in the web engine implementation and is not
-      // contained in the analyzer summary for Flutter.
-      // ignore: undefined_function, avoid_dynamic_calls
-      return ui.webOnlyInstantiateImageCodecFromUrl(
+      return ui_web.createImageCodecFromUrl(
         resolved,
         chunkCallback: (int bytes, int total) {
           chunkEvents.add(ImageChunkEvent(
               cumulativeBytesLoaded: bytes, expectedTotalBytes: total));
         },
-      ) as Future<ui.Codec>;
+      );
     }
   }
 
   @override
-  bool operator ==(dynamic other) {
+  bool operator ==(Object other) {
     if (other.runtimeType != runtimeType) {
       return false;
     }
